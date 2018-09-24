@@ -1,64 +1,70 @@
 import socket
 import sys
 import select
-import ssl
 import random
 from Crypto import Random
 from Crypto.Cipher import AES
-import hmac
-import hashlib
-import base64
-from Crypto.Hash import HMAC
+from Crypto.Hash import HMAC, SHA256
+from datetime import datetime
 
 # Create a UDP socket
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
+serverSock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 server_address = ('localhost', 10000)
 
+# Calculate the clients Secret
 sharedPrime = 12973
 sharedBase = 14479
-clientSec = random.randint(1000,1100)
-print("client sec", clientSec)
-clientSecret = str(sharedBase ** clientSec % sharedPrime)
-print("C", clientSecret)
-sock.sendto(clientSecret.encode('utf-8'), server_address)
-serverSecret = sock.recv(2048)
-serverSecret.decode('utf-8')
-if serverSecret:
-    print("S", serverSecret)
-    commonSecret = int(serverSecret) ** int(clientSecret) % sharedPrime
-    print("Common", commonSecret)
+clientSecret = str(sharedBase ** random.randint(1000,1100) % sharedPrime)
+serverSock.sendto(clientSecret.encode('utf-8'), server_address)
 
-#iv = ''.join([chr(random.randint(0, 0xFF)) for i in range(16)])
+# Receive the servers secret
+serverSecret = serverSock.recv(2048).decode('utf-8')
 
+# Calculate the common secret key
+commonSecret = int(serverSecret) ** int(clientSecret) % sharedPrime
+print("The shared key is ", commonSecret)
 
 while True:
+    # Create an advanced encrypted standard object using our shared key, to encrypt message
     iv = Random.new().read(AES.block_size)
     encodeSecret = str(commonSecret)
     bitKey = encodeSecret.encode('utf-8')
     key = encodeSecret.ljust(16)
     obj = AES.new(key, AES.MODE_CBC, iv)
-    # maintains a list of possible input streams
-    sockets_list = [sys.stdin, sock]
-    read_sockets,write_socket, error_socket = select.select(sockets_list,[],[])
 
+    # Maintains a list of possible input streams
+    sockets_list = [sys.stdin, serverSock]
+    read_sockets,write_socket, error_socket = select.select(sockets_list,[],[])
     for socks in read_sockets:
-        if socks == sock:
+        if socks == serverSock:
             message = socks.recv(2048)
-            print("rec",message)
-            #decryptMessage = str(message)
+
+            # Create an advanced encrypted standard object using our shared key, to decrypt message
             obj2 = AES.new(key, AES.MODE_CBC, ivTemp)
-            print("Riktigt mes", obj2.decrypt(message))
+            decrypt = str(obj2.decrypt(message))
+            startIndex = decrypt.find('2')
+            print("\nDecrypted message received: ", decrypt[2:startIndex-2])
+            recvTime = decrypt[startIndex:startIndex+19]
+
+            # Compare timestamps
+            if recvTime == sendTime:
+                print("\nReceived timestamp matches sent timestamp. Replay protection confirmed!")
         else:
-            message = sys.stdin.readline()
-            encryptMessage = obj.encrypt(message.ljust(16))
-            #sign = base64.b64encode(hmac.new(bitKey, encryptMessage, digestmod=hashlib.sha256).digest())
-            #print("Sign",sign)
-            sign = HMAC.new(encryptMessage).digest()
-            print("Sign", sign)
-        #    print("digest", sign.hexdigest())
-            sock.sendto(sign, server_address)
+            print("\nWrite a message: ")
+            sendTime = str(datetime.now())[0:19]
+            timeMessage = sys.stdin.readline() + sendTime
+
+            # Encrypt the combined message and time
+            encryptMessage = obj.encrypt(timeMessage.ljust(64))
+            print("\nEncrypted message to send: ", encryptMessage)
+
+            # Hash the encrypted message with the shared key and SHA256
+            sign = HMAC.new(bitKey, encryptMessage, digestmod=SHA256).digest()
+            print("\nHash to send: ", sign)
+
+            # Send message and hash to server
+            serverSock.sendto(sign, server_address)
+            serverSock.sendto(encryptMessage, server_address)
             ivTemp = iv
-            #sys.stdout.write(message)
-            #sys.stdout.flush()
-sock.close()
+
+serverSock.close()

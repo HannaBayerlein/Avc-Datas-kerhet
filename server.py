@@ -2,40 +2,49 @@ import socket
 import sys
 import random
 from Crypto.Cipher import AES
+from Crypto.Hash import HMAC, SHA256
+from datetime import datetime
 
-# Create a TCP/IP socket
+# Create a UDP socket
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-# Bind the socket to the port
+# Bind the socket to the address
 server_address = ('localhost', 10000)
 sock.bind(server_address)
 
+# Calculate the servers secret
 sharedPrime = 12973
 sharedBase = 14479
-serverSec = random.randint(1000,1100)
-print("server", serverSec)
-serverSecret = str((sharedBase ** serverSec) % sharedPrime)
-print("S", serverSecret)
-clientSecret, address = sock.recvfrom(4096)
-clientSecret.decode('utf-8')
-int(clientSecret)
-print("secC", clientSecret)
-if clientSecret:
-    sent = sock.sendto(serverSecret.encode('utf-8'), address)
+serverSecret = str((sharedBase ** random.randint(1000,1100)) % sharedPrime)
 
+# Receive the clients secret
+clientSecret, address = sock.recvfrom(4096)
+
+sock.sendto(serverSecret.encode('utf-8'), address)
+
+# Calculate the common secret key
 commonSecret = int(serverSecret) ** int(clientSecret) % sharedPrime
-print("Common", commonSecret)
+print("The shared key is ", commonSecret)
+bitKey = str(commonSecret).encode('utf-8')
 
 
 while True:
-    print('\nwaiting to receive message')
-    data, address = sock.recvfrom(4096)
+    # Receive the hash from the client
+    print('\nWaiting to receive message')
+    hash, address = sock.recvfrom(4096)
+    print("\nReceived hash from client: ",hash)
 
-    print('received %s bytes from %s' % (len(data), address))
-    #sent = sock.sendto(data, address)
-    #print(data)
+    # Receive the encrypted message from the client
+    encrypt, address = sock.recvfrom(4096)
+    print("\nReceived encrypted message from client: ",encrypt)
 
-    if data:
-        sent = sock.sendto(data, address)
-        print(data)
-        #print >>sys.stderr, 'sent %s bytes back to %s' % (sent, address)
+    # Calculate the hash with the common secret key, encrypted message and SHA256
+    sign = HMAC.new(bitKey ,encrypt, digestmod=SHA256).digest()
+
+    # Compare the calculated hash with the received hash
+    if hash == sign:
+        print("\nCalculated hash matches received hash. Message not tampered with.")
+
+    if encrypt:
+        # Echo the received encrypted message
+        sock.sendto(encrypt, address)
